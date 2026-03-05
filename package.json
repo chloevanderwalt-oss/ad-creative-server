@@ -1,24 +1,3 @@
-{                                                                                                                                                                              
-    "name": "ad-creative-server",                                                                                                                                                
-    "version": "1.0.0",                                           
-    "main": "server.js",
-    "scripts": {
-      "start": "node server.js"
-    },
-    "dependencies": {
-      "express": "^4.18.2",
-      "sharp": "^0.33.0",
-      "axios": "^1.6.0",
-      "googleapis": "^128.0.0",
-      "dotenv": "^16.0.0"
-    },
-    "engines": {
-      "node": ">=18.0.0"
-    }
-  }
-
-  Commit, then edit renderer.js — replace entire contents:
-
   const sharp = require('sharp');
   const axios = require('axios');
 
