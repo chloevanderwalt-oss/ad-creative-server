@@ -1,0 +1,12 @@
+# render.yaml — Render.com deployment config
+services:
+  - type: web
+    name: ad-creative-server
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: API_SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
