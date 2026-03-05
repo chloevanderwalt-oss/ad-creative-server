@@ -1,49 +1,133 @@
-const chromium = require('@sparticuz/chromium');
-  const puppeteer = require('puppeteer-core');
-  const axios = require('axios');
-  const templates = require('./templates');
 
-  async function fetchImageAsBase64(url) {
+  const sharp = require('sharp');
+  const axios = require('axios');
+
+  async function fetchImageBuffer(url) {
     const response = await axios.get(url, {
       responseType: 'arraybuffer',
       timeout: 15000,
       headers: { 'User-Agent': 'Mozilla/5.0' },
     });
-    const mimeType = response.headers['content-type'] || 'image/jpeg';
-    const base64 = Buffer.from(response.data).toString('base64');
-    return { base64, mimeType };
+    return Buffer.from(response.data);
   }
 
   const SIZES = [
-    { name: 'meta-square-1080x1080',  fn: 'metaSquare',    w: 1080, h: 1080 },
-    { name: 'meta-story-1080x1920',   fn: 'metaStory',     w: 1080, h: 1920 },
-    { name: 'gdn-300x250',            fn: 'gdnSquare',     w: 300,  h: 250  },
-    { name: 'gdn-728x90',             fn: 'gdnLandscape',  w: 728,  h: 90   },
-    { name: 'gdn-300x600',            fn: 'gdnPortrait',   w: 300,  h: 600  },
+    { name: 'meta-square-1080x1080', w: 1080, h: 1080 },
+    { name: 'meta-story-1080x1920',  w: 1080, h: 1920 },
+    { name: 'gdn-300x250',           w: 300,  h: 250  },
+    { name: 'gdn-728x90',            w: 728,  h: 90   },
+    { name: 'gdn-300x600',           w: 300,  h: 600  },
   ];
 
-  async function renderAll(brief) {
-    const { base64: bgBase64, mimeType } = await fetchImageAsBase64(brief.bgImageUrl);
-
-    const browser = await puppeteer.launch({
-      args: [...chromium.args, '--disable-dev-shm-usage'],
-      defaultViewport: null,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    });
-
-    const results = [];
-
-    for (const size of SIZES) {
-      const html = templates[size.fn](brief, bgBase64, mimeType);
-      const page = await browser.newPage();
-      await page.setViewport({ width: size.w, height: size.h, deviceScaleFactor: 1 });
-      await page.setContent(html, { waitUntil: 'domcontentloaded' });
-      await new Promise(r => setTimeout(r, 200));
-      const buffer = await page.screenshot({ type: 'png' });
-      await page.close();
-      results.push({ name: size.name + '.png', buffer });
+  function wrapText(text, maxChars) {
+    const words = text.split(' ');
+    const lines = [];
+    let current = '';
+    for (const word of words) {
+      if ((current + ' ' + word).trim().length <= maxChars) {
+        current = (current + ' ' + word).trim();
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
     }
-}
+    if (current) lines.push(current);
+    return lines;
+  }
 
-module.exports = { renderAll };
+  function escapeXml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  function createSvg(w, h, brief) {
+    const isLandscape = w >= 600 && h <= 100;
+    const isSmall = w <= 300;
+
+    if (isLandscape) {
+      const fs = Math.floor(h * 0.28);
+      const ss = Math.floor(h * 0.16);
+      const pad = Math.floor(h * 0.15);
+      const cbW = Math.floor(w * 0.18);
+      const cbX = w - cbW - pad;
+      const cbY = Math.floor(h * 0.18);
+      const cbH = Math.floor(h * 0.64);
+      return `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
+        <defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="rgba(0,0,0,0.82)"/>
+          <stop offset="65%" stop-color="rgba(0,0,0,0.35)"/>
+          <stop offset="100%" stop-color="rgba(0,0,0,0.05)"/>
+        </linearGradient></defs>
+        <rect width="${w}" height="${h}" fill="url(#g)"/>
+        <text x="${pad}" y="${Math.floor(h * 0.46)}" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="${fs}" fill="white"
+  dominant-baseline="middle">${escapeXml(brief.headline.slice(0,55))}</text>
+        <text x="${pad}" y="${Math.floor(h * 0.74)}" font-family="Arial,sans-serif" font-size="${ss}" fill="rgba(255,255,255,0.88)"
+  dominant-baseline="middle">${escapeXml(brief.subheadline.slice(0,70))}</text>
+        <rect x="${cbX}" y="${cbY}" width="${cbW}" height="${cbH}" rx="4" fill="white"/>
+        <text x="${cbX + cbW / 2}" y="${cbY + cbH / 2}" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="${ss}" fill="#111" text-anchor="middle"
+  dominant-baseline="middle">${escapeXml(brief.cta)}</text>
+      </svg>`;
+    }
+
+    const hs = isSmall ? Math.floor(w * 0.057) : Math.floor(w * 0.052);
+    const ss = isSmall ? Math.floor(w * 0.037) : Math.floor(w * 0.026);
+    const cs = isSmall ? Math.floor(w * 0.037) : Math.floor(w * 0.023);
+    const pad = Math.floor(w * 0.06);
+    const maxW = isSmall ? 26 : 30;
+    const hLines = wrapText(brief.headline, maxW);
+    const sLines = wrapText(brief.subheadline, isSmall ? 36 : 48);
+    const cbH = Math.floor(cs * 2.4);
+    const cbW = Math.min(w - pad * 2, Math.max(cs * (brief.cta.length + 4), w * 0.4));
+    const lh = hs * 1.3;
+    const slh = ss * 1.45;
+    const totalH = hLines.length * lh + sLines.length * slh + cbH + ss * 2;
+    let y = h - Math.floor(h * 0.06) - totalH;
+    let els = '';
+    for (const line of hLines) {
+      y += lh;
+      els += `<text x="${pad}" y="${y}" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="${hs}" fill="white">${escapeXml(line)}</text>`;
+    }
+    y += ss * 0.8;
+    for (const line of sLines) {
+      y += slh;
+      els += `<text x="${pad}" y="${y}" font-family="Arial,sans-serif" font-size="${ss}" fill="rgba(255,255,255,0.88)">${escapeXml(line)}</text>`;
+    }
+    y += cs * 1.2;
+    els += `<rect x="${pad}" y="${y}" width="${cbW}" height="${cbH}" rx="${Math.floor(cbH * 0.15)}" fill="white"/>
+      <text x="${pad + cbW / 2}" y="${y + cbH / 2}" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="${cs}" fill="#111" text-anchor="middle"
+  dominant-baseline="middle">${escapeXml(brief.cta)}</text>`;
+
+    return `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
+      <defs><linearGradient id="g" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="rgba(0,0,0,0.08)"/>
+        <stop offset="45%" stop-color="rgba(0,0,0,0.52)"/>
+        <stop offset="100%" stop-color="rgba(0,0,0,0.84)"/>
+      </linearGradient></defs>
+      <rect width="${w}" height="${h}" fill="url(#g)"/>
+      ${els}
+    </svg>`;
+  }
+
+  async function renderAll(brief) {
+    const imageBuffer = await fetchImageBuffer(brief.bgImageUrl);
+    const results = [];
+    for (const size of SIZES) {
+      const bg = await sharp(imageBuffer)
+        .resize(size.w, size.h, { fit: 'cover', position: 'center' })
+        .png()
+        .toBuffer();
+      const svg = Buffer.from(createSvg(size.w, size.h, brief));
+      const output = await sharp(bg)
+        .composite([{ input: svg, top: 0, left: 0 }])
+        .png()
+        .toBuffer();
+      results.push({ name: size.name + '.png', buffer: output });
+    }
+    return results;
+  }
+
+  module.exports = { renderAll };
